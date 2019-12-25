@@ -12,7 +12,7 @@ author:
 - <p>&nbsp;</p>
 - "Advisers: Dr. Itay Saporta-Eksten and Dr. Analia Schlosser"
 - <p>&nbsp;</p>
-date: " September 2019"
+date: " December 2019"
 abstract: |
   \justify
   Using data of a large reemployment bonus program in Israel (2015-2018), I exploit random variation in the intensity of the intervention across localy defined labor markets to study its impact on employment of individuals within these markets. Such effect manifests an externality of the program, and a potential voilation of the stable unit treatment value assumption (Rubin 1990). I use a two-stage least squares (2SLS) interaction model to estimate the effects. Overall, the results are inconclusive and the confidence intervals are wide, probably due to insufficient statisitical power. Future research, using more accurate data and various outcome varibales may provide more accurate estimates, and more reliable assessments for either there are externalities for this intervention or not.
