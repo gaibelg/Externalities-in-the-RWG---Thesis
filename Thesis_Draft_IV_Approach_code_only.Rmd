@@ -1,0 +1,905 @@
+---
+title: "Thesis Draft - IV Approach - Code only"
+author: "Gilad Gaibel"
+date: "12/4/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE , message=FALSE)
+```
+
+
+```{r}
+
+pacman::p_load("readr",  # A packge for dealing with CSVs
+               "stats",
+               "fBasics",
+               "lubridate",
+               "ggplot2",
+               "grid",
+               "cowplot",
+               "gridExtra",
+               "RGraphics",
+               "ggthemes",
+               "lfe", # For easy OLS with FEs and clustered errors
+               "plm",
+               "stargazer",
+               "starpolishr",
+               "tinytex",
+               "kableExtra",
+               "StatMeasures",
+               "DescTools",
+               "broom",
+               "magrittr",
+               "knitr",
+               "dplyr") # For data manipulation
+
+```
+
+```{r}
+
+if (FALSE) {
+
+load("Program_Data.Rdata")  
+
+Full_Data %<>% select("code",
+                      "jskid",
+                      "treated",
+                      "allocationdate",
+                      "All",
+                      "HH_flow",
+                      "HH_stock",
+                      "HH",
+                      "UI", 
+                      "female",
+                      "male",
+                      "arab",
+                      "jew_other",
+                      "ethiopian", 
+                      "married", 
+                      "children", 
+                      "immigrant", 
+                      "slfrep_healthlimit", 
+                      "age", 
+                      "single_parent", 
+                      "ultraorthodox",
+                      "circlespop",
+                      "matriculation",
+                      "total_pop_2017",
+                      "p_inage",
+                      "job_seekers_locality",
+                      "work_force_locality", 
+                      "unemployment_rate_locality", 
+                      "soc_index_todate",
+                      "munic_code",
+                      "cityid",
+                      "originalofficeid",
+                      "real_time", 
+                      "month_lishka_pool",
+                      "t",
+                      "relevant",
+                      "apr",
+                      "spells",
+                      "x",
+                      "y") %>% ungroup()
+  
+set.seed(1234)
+
+Full_Data <- Full_Data %>% ungroup() %>% mutate(x_n = (x-min(x))/(max(x) - min(x)),
+                                                y_n = (y-min(y))/(max(y) - min(y)))
+
+Kmeans <- kmeans(Full_Data %>% ungroup() %>% select(x_n,y_n), 50)
+Full_Data$Kmeans_50 <- Kmeans$cluster
+Kmeans <- kmeans(Full_Data %>% ungroup() %>% select(x_n,y_n), 60)
+Full_Data$Kmeans_60 <- Kmeans$cluster
+Kmeans <- kmeans(Full_Data %>% ungroup() %>% select(x_n,y_n), 70)
+Full_Data$Kmeans_70 <- Kmeans$cluster
+Kmeans <- kmeans(Full_Data %>% ungroup() %>% select(x_n,y_n), 80)
+Full_Data$Kmeans_80 <- Kmeans$cluster
+Kmeans <- kmeans(Full_Data %>% ungroup() %>% select(x_n,y_n), 100)
+Full_Data$Kmeans_100 <- Kmeans$cluster
+Kmeans <- kmeans(Full_Data %>% ungroup() %>% select(x_n,y_n), 120)
+Full_Data$Kmeans_120 <- Kmeans$cluster
+Kmeans <- kmeans(Full_Data %>% ungroup() %>% select(x_n,y_n), 140)
+Full_Data$Kmeans_140 <- Kmeans$cluster
+rm(Kmeans)
+
+
+
+market_stats <- function(data, time_horizon = 12) {
+  
+  print(paste("Initial Obs.", nrow(data %>% filter(t==time_horizon))))
+  
+  data %<>% mutate(total_pop_2017 = replace(total_pop_2017, cityid==1053, 50))
+  
+  # Importing data about which localities are in the program
+  loc_in_program <- read_csv("Localities_in_program.csv")
+  loc_in_program$loc_in_program <- 1
+  data <- left_join(data, loc_in_program, "code")
+  
+  # Filtering observations from localities that are not in the program and irelevants
+  
+  print(paste("Dropped Irelevants", nrow(data %>% filter(t==time_horizon, relevant==0))))
+  data %<>% filter(relevant==1)
+  
+  # Define the local markets
+  data$markets <- data %>%
+    group_by(cityid) %>% 
+    group_indices
+  
+  # Definitions
+  data %<>% 
+    group_by(cityid) %>%
+    mutate(job_seekers_locality = replace(job_seekers_locality, is.na(job_seekers_locality), mean(job_seekers_locality, na.rm = TRUE)),
+           work_force_locality = replace(work_force_locality, is.na(work_force_locality), mean(work_force_locality, na.rm = TRUE))) %>%
+    ungroup() %>%
+    mutate(pool = HH_stock + 2*HH_flow + 3*UI,
+           allocation_ym = update(allocationdate, mday = 1),
+           unemployment_rate_locality = job_seekers_locality / work_force_locality,
+           pop_in_age = round(p_inage*total_pop_2017))
+  
+  data$allocation_unit <- data %>% 
+    group_by(originalofficeid, pool, allocation_ym) %>%
+    group_indices
+
+  # Outcome variable
+  data <- data %>%
+    group_by(jskid) %>%
+    mutate(cumul_abs = time_horizon - sum(apr[which(t<=time_horizon)])) %>%
+    ungroup()
+  
+  # Creating the cross-section
+  data <- data %>%
+    filter(t==time_horizon)
+  
+  # The local proportions and sizes within markets and within allocation unit.
+  
+  ## Construct the variables with empty as -1
+  for (tau in c(-3:(time_horizon-1))) {
+    
+    if (tau>=0) {
+        
+      N_mHHf <- paste0("N_mHHf_",tau)
+      N_mHHs <- paste0("N_mHHs_",tau)
+      N_mUI <- paste0("N_mUI_",tau)
+      N_mHHf_T <- paste0("N_mHHf_T_",tau)
+      N_mHHs_T <- paste0("N_mHHs_T_",tau)
+      N_mUI_T <- paste0("N_mUI_T_",tau)
+      Q_mHHf <- paste0("Q_mHHf_",tau)
+      Q_mHHs <- paste0("Q_mHHs_",tau)
+      Q_mUI <- paste0("Q_mUI_",tau)
+        
+    } else {
+          
+      N_mHHf <- paste0("N_mHHf_n",abs(tau))
+      N_mHHs <- paste0("N_mHHs_n",abs(tau))
+      N_mUI <- paste0("N_mUI_n",abs(tau))
+      N_mHHf_T <- paste0("N_mHHf_T_n",abs(tau))
+      N_mHHs_T <- paste0("N_mHHs_T_n",abs(tau))
+      N_mUI_T <- paste0("N_mUI_T_n",abs(tau))
+      Q_mHHf <- paste0("Q_mHHf_n",abs(tau))
+      Q_mHHs <- paste0("Q_mHHs_n",abs(tau))
+      Q_mUI <- paste0("Q_mUI_n",abs(tau))
+        
+    }
+    
+    data %<>% 
+      mutate(!!N_mHHf := -1,
+             !!N_mHHs := -1,
+             !!N_mUI := -1,
+             !!N_mHHf_T := -1,
+             !!N_mHHs_T := -1,
+             !!N_mUI_T := -1,
+             !!Q_mHHf := -1,
+             !!Q_mHHs := -1,
+             !!Q_mUI := -1)
+  }
+  
+  ## Replace the values within each variable to the correct ones
+  
+  for (tau in c(-2:(time_horizon-1))) {
+    
+      for (a in sort(unique(data$allocation_ym))) {
+    
+        a_date <- as_date(a)
+        
+        if (tau>=0) {
+        
+          N_mHHf <- paste0("N_mHHf_",tau)
+          N_mHHs <- paste0("N_mHHs_",tau)
+          N_mUI <- paste0("N_mUI_",tau)
+          N_mHHf_T <- paste0("N_mHHf_T_",tau)
+          N_mHHs_T <- paste0("N_mHHs_T_",tau)
+          N_mUI_T <- paste0("N_mUI_T_",tau)
+          Q_mHHf <- paste0("Q_mHHf_",tau)
+          Q_mHHs <- paste0("Q_mHHs_",tau)
+          Q_mUI <- paste0("Q_mUI_",tau)
+        
+        } else {
+          
+          N_mHHf <- paste0("N_mHHf_n",abs(tau))
+          N_mHHs <- paste0("N_mHHs_n",abs(tau))
+          N_mUI <- paste0("N_mUI_n",abs(tau))
+          N_mHHf_T <- paste0("N_mHHf_T_n",abs(tau))
+          N_mHHs_T <- paste0("N_mHHs_T_n",abs(tau))
+          N_mUI_T <- paste0("N_mUI_T_n",abs(tau))
+          Q_mHHf <- paste0("Q_mHHf_n",abs(tau))
+          Q_mHHs <- paste0("Q_mHHs_n",abs(tau))
+          Q_mUI <- paste0("Q_mUI_n",abs(tau))
+        
+        }
+        
+        data %<>% group_by(markets) %>%
+          mutate(comparison_allocation = update(a_date, month = month(a_date)+ tau),
+                 !!N_mHHf := replace(get(N_mHHf), 
+                                     allocation_ym==a_date, 
+                                     if_else(sum(HH_flow[which(allocation_ym==comparison_allocation)])>0,
+                                             sum(HH_flow[which(allocation_ym==comparison_allocation)]), 
+                                             0)),
+                 !!N_mHHs := replace(get(N_mHHs), 
+                                     allocation_ym==a_date, 
+                                     if_else(sum(HH_stock[which(allocation_ym==comparison_allocation)])>0,
+                                             sum(HH_stock[which(allocation_ym==comparison_allocation)]), 
+                                             0)),
+                 !!N_mUI := replace(get(N_mUI), 
+                                     allocation_ym==a_date, 
+                                     if_else(sum(UI[which(allocation_ym==comparison_allocation)])>0,
+                                             sum(UI[which(allocation_ym==comparison_allocation)]), 
+                                             0)),
+                 !!N_mHHf_T := replace(get(N_mHHf_T), 
+                                     allocation_ym==a_date, 
+                                     if_else(sum(HH_flow[which((allocation_ym==comparison_allocation) & (treated==1))])>0,
+                                             sum(HH_flow[which((allocation_ym==comparison_allocation) & (treated==1))]),
+                                             0)),
+                 !!N_mHHs_T := replace(get(N_mHHs_T), 
+                                     allocation_ym==a_date, 
+                                     if_else(sum(HH_stock[which((allocation_ym==comparison_allocation) & (treated==1))])>0,
+                                             sum(HH_stock[which((allocation_ym==comparison_allocation) & (treated==1))]),
+                                             0)),
+                 !!N_mUI_T := replace(get(N_mUI_T), 
+                                     allocation_ym==a_date, 
+                                     if_else(sum(UI[which((allocation_ym==comparison_allocation) & (treated==1))])>0,
+                                             sum(UI[which((allocation_ym==comparison_allocation) & (treated==1))]),
+                                             0)),
+                 !!Q_mHHf := if_else(get(N_mHHf)>0, get(N_mHHf_T) / get(N_mHHf), get(Q_mHHf)),
+                 !!Q_mHHs := if_else(get(N_mHHs)>0, get(N_mHHs_T) / get(N_mHHs), get(Q_mHHs)),
+                 !!Q_mUI := if_else(get(N_mUI)>0, get(N_mUI_T) / get(N_mUI), get(Q_mUI))) %>% ungroup()
+      
+      }    
+  
+  }
+
+  for (tau in c(-2:(time_horizon-1))) {
+    
+    if (tau>=0) {
+        
+      N_mHHf <- paste0("N_mHHf_",tau)
+      N_mHHs <- paste0("N_mHHs_",tau)
+      N_mUI <- paste0("N_mUI_",tau)
+      N_mHHf_T <- paste0("N_mHHf_T_",tau)
+      N_mHHs_T <- paste0("N_mHHs_T_",tau)
+      N_mUI_T <- paste0("N_mUI_T_",tau)
+      Q_mHHf <- paste0("Q_mHHf_",tau)
+      Q_mHHs <- paste0("Q_mHHs_",tau)
+      Q_mUI <- paste0("Q_mUI_",tau)
+        
+    } else {
+          
+      N_mHHf <- paste0("N_mHHf_n",abs(tau))
+      N_mHHs <- paste0("N_mHHs_n",abs(tau))
+      N_mUI <- paste0("N_mUI_n",abs(tau))
+      N_mHHf_T <- paste0("N_mHHf_T_n",abs(tau))
+      N_mHHs_T <- paste0("N_mHHs_T_n",abs(tau))
+      N_mUI_T <- paste0("N_mUI_T_n",abs(tau))
+      Q_mHHf <- paste0("Q_mHHf_n",abs(tau))
+      Q_mHHs <- paste0("Q_mHHs_n",abs(tau))
+      Q_mUI <- paste0("Q_mUI_n",abs(tau))
+        
+    }
+    
+    data %<>% 
+      mutate(!!N_mHHf := replace(get(N_mHHf), get(N_mHHf)<0, NA),
+             !!N_mHHs := replace(get(N_mHHs), get(N_mHHs)<0, NA),
+             !!N_mUI := replace(get(N_mUI), get(N_mUI)<0, NA),
+             !!N_mHHf_T := replace(get(N_mHHf_T), get(N_mHHf_T)<0, NA),
+             !!N_mHHs_T := replace(get(N_mHHs_T), get(N_mHHs_T)<0, NA),
+             !!N_mUI_T := replace(get(N_mUI_T), get(N_mUI_T)<0, NA),
+             !!Q_mHHf := replace(get(Q_mHHf), get(Q_mHHf)<0, NA),
+             !!Q_mHHs := replace(get(Q_mHHs), get(Q_mHHs)<0, NA),
+             !!Q_mUI := replace(get(Q_mUI), get(Q_mUI)<0, NA))
+  }
+  
+  
+  for (a in sort(unique(data$allocation_ym))) {
+    
+    a_date <- as_date(a)
+    comp_date <- update(a_date, month = month(a_date) - 2)
+    
+    data %<>% 
+      group_by(markets) %>%
+      mutate(N_mHHf_n3 = replace(N_mHHf_n3, 
+                                allocation_ym==a_date, 
+                                if_else(sum(HH_flow[which((allocation_ym<comp_date))])>0,
+                                        sum(HH_flow[which(allocation_ym<comp_date)]),
+                                        0)),
+             N_mHHs_n3 = replace(N_mHHs_n3, 
+                                allocation_ym==a_date, 
+                                if_else(sum(HH_stock[which((allocation_ym<comp_date))])>0,
+                                        sum(HH_stock[which(allocation_ym<comp_date)]),
+                                        0)),
+             N_mUI_n3 = replace(N_mUI_n3, 
+                                allocation_ym==a_date, 
+                                if_else(sum(UI[which((allocation_ym<comp_date))])>0,
+                                        sum(UI[which(allocation_ym<comp_date)]),
+                                        0)),
+             N_mHHf_T_n3 = replace(N_mHHf_T_n3, 
+                                allocation_ym==a_date, 
+                                if_else(sum(HH_flow[which((allocation_ym<comp_date) & (treated==1))])>0,
+                                        sum(HH_flow[which((allocation_ym<comp_date) & (treated==1))]),
+                                        0)),
+             N_mHHs_T_n3 = replace(N_mHHs_T_n3, 
+                                allocation_ym==a_date, 
+                                if_else(sum(HH_stock[which((allocation_ym<comp_date) & (treated==1))])>0,
+                                        sum(HH_stock[which((allocation_ym<comp_date) & (treated==1))]),
+                                        0)),
+             N_mUI_T_n3 = replace(N_mUI_T_n3, 
+                                allocation_ym==a_date, 
+                                if_else(sum(UI[which((allocation_ym<comp_date) & (treated==1))])>0,
+                                        sum(UI[which((allocation_ym<comp_date) & (treated==1))]),
+                                        0)),
+             Q_mHHf_n3 = if_else(N_mHHf_n3>0, N_mHHf_T_n3 / N_mHHf_n3, Q_mHHf_n3),
+             Q_mHHs_n3 = if_else(N_mHHs_n3>0, N_mHHs_T_n3 / N_mHHs_n3, Q_mHHs_n3),
+             Q_mUI_n3 = if_else(N_mUI_n3>0, N_mUI_T_n3 / N_mUI_n3, Q_mUI_n3))
+  }
+               
+  data %<>% 
+      mutate(Q_m_self = case_when(pool==1 ~ Q_mHHs_0,
+                                  pool==2 ~ Q_mHHf_0,
+                                  pool==3 ~ Q_mUI_0))
+             
+  
+  # Main independant variable
+  
+  ## Nominator Q_Full
+  data %<>% mutate(nom_Q_Full = 0,
+                   nom_Q_Full = if_else(N_mHHf_n3==0 , nom_Q_Full ,nom_Q_Full + N_mHHf_n3*Q_mHHf_n3),
+                   nom_Q_Full = if_else(N_mHHs_n3==0 , nom_Q_Full ,nom_Q_Full + N_mHHs_n3*Q_mHHs_n3),
+                   nom_Q_Full = if_else(N_mUI_n3==0 , nom_Q_Full ,nom_Q_Full + N_mUI_n3*Q_mUI_n3))
+  
+  for (tau in c(-2:(time_horizon-1))) {
+    
+    if (tau>=0) {
+        
+      N_mHHf <- paste0("N_mHHf_",tau)
+      N_mHHs <- paste0("N_mHHs_",tau)
+      N_mUI <- paste0("N_mUI_",tau)
+      N_mHHf_T <- paste0("N_mHHf_T_",tau)
+      N_mHHs_T <- paste0("N_mHHs_T_",tau)
+      N_mUI_T <- paste0("N_mUI_T_",tau)
+      Q_mHHf <- paste0("Q_mHHf_",tau)
+      Q_mHHs <- paste0("Q_mHHs_",tau)
+      Q_mUI <- paste0("Q_mUI_",tau)
+        
+    } else {
+          
+      N_mHHf <- paste0("N_mHHf_n",abs(tau))
+      N_mHHs <- paste0("N_mHHs_n",abs(tau))
+      N_mUI <- paste0("N_mUI_n",abs(tau))
+      N_mHHf_T <- paste0("N_mHHf_T_n",abs(tau))
+      N_mHHs_T <- paste0("N_mHHs_T_n",abs(tau))
+      N_mUI_T <- paste0("N_mUI_T_n",abs(tau))
+      Q_mHHf <- paste0("Q_mHHf_n",abs(tau))
+      Q_mHHs <- paste0("Q_mHHs_n",abs(tau))
+      Q_mUI <- paste0("Q_mUI_n",abs(tau))
+        
+    }
+    
+    if (tau>=0) tau_u <- tau else tau_u <- 0
+  
+    data %<>% 
+        mutate(nom_Q_Full = if_else(get(N_mHHf)==0 , nom_Q_Full ,nom_Q_Full + (time_horizon-tau_u)*(get(N_mHHf)/time_horizon)*get(Q_mHHf)),
+               nom_Q_Full = if_else(get(N_mHHs)==0 , nom_Q_Full ,nom_Q_Full + (time_horizon-tau_u)*(get(N_mHHs)/time_horizon)*get(Q_mHHs)),
+               nom_Q_Full = if_else(get(N_mUI)==0 , nom_Q_Full ,nom_Q_Full + (time_horizon-tau_u)*(get(N_mUI)/time_horizon)*get(Q_mUI)))
+               
+  }
+  
+  ## Nominator Q_Part
+  data %<>% mutate(nom_Q_Part = 0,
+                   nom_Q_Part = if_else(N_mHHf_n2==0 , nom_Q_Part ,nom_Q_Part + (1/time_horizon)*(N_mHHf_n2*Q_mHHf_n2)),
+                   nom_Q_Part = if_else(N_mHHs_n2==0 , nom_Q_Part ,nom_Q_Part + (1/time_horizon)*(N_mHHs_n2*Q_mHHs_n2)),
+                   nom_Q_Part = if_else(N_mUI_n2==0 , nom_Q_Part ,nom_Q_Part + (1/time_horizon)*(N_mUI_n2*Q_mUI_n2)),
+                   nom_Q_Part = if_else(N_mHHf_n1==0 , nom_Q_Part ,nom_Q_Part + (2/time_horizon)*(N_mHHf_n1*Q_mHHf_n1)),
+                   nom_Q_Part = if_else(N_mHHs_n1==0 , nom_Q_Part ,nom_Q_Part + (2/time_horizon)*(N_mHHs_n1*Q_mHHs_n1)),
+                   nom_Q_Part = if_else(N_mUI_n1==0 , nom_Q_Part ,nom_Q_Part + (2/time_horizon)*(N_mUI_n1*Q_mUI_n1)),
+                   nom_Q_Part = if_else(N_mHHf_10==0 , nom_Q_Part ,nom_Q_Part + (2/time_horizon)*(N_mHHf_10*Q_mHHf_10)),
+                   nom_Q_Part = if_else(N_mHHs_10==0 , nom_Q_Part ,nom_Q_Part + (2/time_horizon)*(N_mHHs_10*Q_mHHs_10)),
+                   nom_Q_Part = if_else(N_mUI_10==0 , nom_Q_Part ,nom_Q_Part + (2/time_horizon)*(N_mUI_10*Q_mUI_10)),
+                   nom_Q_Part = if_else(N_mHHf_11==0 , nom_Q_Part ,nom_Q_Part + (1/time_horizon)*(N_mHHf_11*Q_mHHf_11)),
+                   nom_Q_Part = if_else(N_mHHs_11==0 , nom_Q_Part ,nom_Q_Part + (1/time_horizon)*(N_mHHs_11*Q_mHHs_11)),
+                   nom_Q_Part = if_else(N_mUI_11==0 , nom_Q_Part ,nom_Q_Part + (1/time_horizon)*(N_mUI_11*Q_mUI_11)))
+  
+  for (tau in c(0:(9))) {
+    
+    if (tau>=0) {
+        
+      N_mHHf <- paste0("N_mHHf_",tau)
+      N_mHHs <- paste0("N_mHHs_",tau)
+      N_mUI <- paste0("N_mUI_",tau)
+      N_mHHf_T <- paste0("N_mHHf_T_",tau)
+      N_mHHs_T <- paste0("N_mHHs_T_",tau)
+      N_mUI_T <- paste0("N_mUI_T_",tau)
+      Q_mHHf <- paste0("Q_mHHf_",tau)
+      Q_mHHs <- paste0("Q_mHHs_",tau)
+      Q_mUI <- paste0("Q_mUI_",tau)
+        
+    } else {
+          
+      N_mHHf <- paste0("N_mHHf_n",abs(tau))
+      N_mHHs <- paste0("N_mHHs_n",abs(tau))
+      N_mUI <- paste0("N_mUI_n",abs(tau))
+      N_mHHf_T <- paste0("N_mHHf_T_n",abs(tau))
+      N_mHHs_T <- paste0("N_mHHs_T_n",abs(tau))
+      N_mUI_T <- paste0("N_mUI_T_n",abs(tau))
+      Q_mHHf <- paste0("Q_mHHf_n",abs(tau))
+      Q_mHHs <- paste0("Q_mHHs_n",abs(tau))
+      Q_mUI <- paste0("Q_mUI_n",abs(tau))
+        
+    }
+    
+    data %<>% 
+        mutate(nom_Q_Part = if_else(get(N_mHHf)==0 , nom_Q_Part ,nom_Q_Part + (3/time_horizon)*get(N_mHHf)*get(Q_mHHf)),
+               nom_Q_Part = if_else(get(N_mHHs)==0 , nom_Q_Part ,nom_Q_Part + (3/time_horizon)*get(N_mHHs)*get(Q_mHHs)),
+               nom_Q_Part = if_else(get(N_mUI)==0 , nom_Q_Part ,nom_Q_Part + (3/time_horizon)*get(N_mUI)*get(Q_mUI)))
+    
+  }
+  
+  ## Denominator
+  data %<>% 
+    group_by(markets) %>%
+    add_tally(name = "N_m_TC") %>%
+    ungroup()
+
+  ## Finalizing
+  data %<>% 
+    mutate(Q_Full = nom_Q_Full / N_m_TC,
+           Q_Part = nom_Q_Part / N_m_TC)
+  
+  # Limiting he sample to observations with sufficiently long trajectory.
+  
+  
+  print(paste("Dropped Short Spells", nrow(data %>% filter(spells < time_horizon))))
+  data %<>% filter(spells >=time_horizon)
+  print(paste("Dropped UI", nrow(data %>% filter(HH!=1))))
+  data %<>% filter(HH==1)
+  print(paste("Dropped Missing Municipality Code", nrow(data %>% filter(munic_code==""))))
+  data %<>% filter(!(munic_code==""))
+  print(paste("Dropped Bad Covariates", nrow(data %>% filter(!complete.cases(data %>% select("female",
+                                                                                                "arab", 
+                                                                                                "ethiopian", 
+                                                                                                "married", 
+                                                                                                "children", 
+                                                                                                "immigrant", 
+                                                                                                "slfrep_healthlimit", 
+                                                                                                "age", 
+                                                                                                "single_parent", 
+                                                                                                "ultraorthodox",
+                                                                                                "circlespop",
+                                                                                                "matriculation"))))))
+  data %<>% filter(complete.cases(data %>% select("female",
+                                                  "arab", 
+                                                  "ethiopian", 
+                                                  "married", 
+                                                  "children", 
+                                                  "immigrant", 
+                                                  "slfrep_healthlimit", 
+                                                  "age", 
+                                                  "single_parent", 
+                                                  "ultraorthodox",
+                                                  "circlespop",
+                                                  "matriculation")))
+  
+  
+
+  print(paste("Remaining Obs.", nrow(data)))
+  print(paste("Amount of Markets.", length(unique(data$markets))))
+  
+  print(paste("Missing Work Force Characteristics", sum(!complete.cases(data %>% select(job_seekers_locality,
+                                                                                        work_force_locality,
+                                                                                        unemployment_rate_locality)))))
+  data %<>% group_by(munic_code) %>%
+    mutate(job_seekers_locality = replace(job_seekers_locality, is.na(job_seekers_locality), mean(job_seekers_locality, na.rm = TRUE)),
+           work_force_locality = replace(work_force_locality, is.na(work_force_locality), mean(work_force_locality, na.rm = TRUE)),
+           unemployment_rate_locality = replace(unemployment_rate_locality, is.na(unemployment_rate_locality), mean(unemployment_rate_locality, na.rm = TRUE))) %>%
+    ungroup()
+  
+  data %<>%
+    mutate(job_seekers_locality = replace(job_seekers_locality, cityid==4502, mean(job_seekers_locality[which(cityid==4203)], na.rm = TRUE)),
+           work_force_locality = replace(work_force_locality, cityid==4502, mean(work_force_locality[which(cityid==4203)], na.rm = TRUE)),
+           unemployment_rate_locality = replace(unemployment_rate_locality, cityid==4502, mean(unemployment_rate_locality[which(cityid==4203)], na.rm = TRUE)))
+  
+  data %<>% 
+    mutate(job_seekers_locality = replace(job_seekers_locality, is.na(job_seekers_locality), mean(job_seekers_locality, na.rm = TRUE)),
+           work_force_locality = replace(work_force_locality, is.na(work_force_locality), mean(work_force_locality, na.rm = TRUE)),
+           unemployment_rate_locality = replace(unemployment_rate_locality, is.na(unemployment_rate_locality), mean(unemployment_rate_locality, na.rm = TRUE)))
+  
+  data %<>% select(jskid, treated, All, HH_flow, HH_stock, female, male, arab, jew_other, ethiopian, married, children,immigrant, slfrep_healthlimit, age, single_parent, ultraorthodox, circlespop, matriculation, total_pop_2017, job_seekers_locality, work_force_locality, unemployment_rate_locality, soc_index_todate, cityid, originalofficeid, real_time, x, y, markets, pool, allocation_ym, pop_in_age, allocation_unit, cumul_abs, Q_m_self, N_m_TC, Q_Full, Q_Part, starts_with("Kmeans"))
+
+  print(paste("Incomplete Cases", sum(!complete.cases(data))))  
+  
+  data %<>% mutate(log_N_m_TC = log(N_m_TC),
+                   log_work_force_locality = log(work_force_locality),
+                   log_total_pop_2017 = log(total_pop_2017),
+                   log_pop_in_age = log(pop_in_age))
+  
+  return(data)
+  
+}
+
+data <- Full_Data %>%
+  group_by(cityid) %>%
+  mutate(defined_markets = group_indices()) %>%
+  ungroup() %>%
+  market_stats
+
+save(data, file = "data.Rdata", precheck = FALSE)
+
+
+###
+
+
+dataK50 <- Full_Data %>%
+  group_by(Kmeans_50, female, arab) %>%
+  mutate(defined_markets = group_indices()) %>%
+  market_stats
+
+save(dataK50, file = "dataK50.Rdata", precheck = FALSE)
+
+dataK60 <- Full_Data %>%
+  group_by(Kmeans_60, female, arab) %>%
+  mutate(defined_markets = group_indices()) %>%
+  market_stats
+
+save(dataK60, file = "dataK60.Rdata", precheck = FALSE)
+
+dataK70 <- Full_Data %>%
+  group_by(Kmeans_70, female, arab) %>%
+  mutate(defined_markets = group_indices()) %>%
+  market_stats
+
+save(dataK70, file = "dataK70.Rdata", precheck = FALSE)
+
+dataK80 <- Full_Data %>%
+  group_by(Kmeans_80, female, arab) %>%
+  mutate(defined_markets = group_indices()) %>%
+  market_stats
+
+save(dataK80, file = "dataK80.Rdata", precheck = FALSE)
+
+dataK100 <- Full_Data %>%
+  group_by(Kmeans_100, female, arab) %>%
+  mutate(defined_markets = group_indices()) %>%
+  market_stats
+
+save(dataK100, file = "dataK100.Rdata", precheck = FALSE)
+
+dataK120 <- Full_Data %>%
+  group_by(Kmeans_120, female, arab) %>%
+  mutate(defined_markets = group_indices()) %>%
+  market_stats
+
+save(dataK120, file = "dataK120.Rdata", precheck = FALSE)
+
+dataK140 <- Full_Data %>%
+  group_by(Kmeans_140, female, arab) %>%
+  mutate(defined_markets = group_indices()) %>%
+  market_stats
+
+save(dataK140, file = "dataK140.Rdata", precheck = FALSE)
+
+dataKAll <- Full_Data %>%
+  group_by(cityid, female, arab) %>%
+  mutate(defined_markets = group_indices()) %>%
+  market_stats
+
+save(dataKAll, file = "dataKAll.Rdata", precheck = FALSE)
+
+}
+```
+
+```{r}
+
+load("data.Rdata")
+load("dataK50.Rdata")
+load("dataK60.Rdata")
+load("dataK70.Rdata")
+load("dataK80.Rdata")
+load("dataK100.Rdata")
+load("dataK120.Rdata")
+load("dataK140.Rdata")
+load("dataKAll.Rdata")
+
+data %<>%
+  group_by(markets) %>%
+  mutate(A_work_force_locality =mean(work_force_locality, na.rm = TRUE),
+         A_unemployment_rate_locality = mean(job_seekers_locality / work_force_locality, na.rm = TRUE),
+         index = row_number(markets)) %>%
+  ungroup() %>%
+  mutate(
+    N_ratio = N_m_TC/A_work_force_locality,
+    med_unemployment_rate_locality = quantile(A_unemployment_rate_locality[which(index==1)], 0.75 , na.rm = T),
+    med_N_ratio = quantile(N_ratio[which(index==1)], 0.5, na.rm = T))
+
+data_U <- data[which(data$unemployment_rate_locality > data$med_unemployment_rate_locality),]
+data_N <- data[which(data$N_ratio > data$med_N_ratio),]
+data_m <- data[which(data$pop_in_age < 15000),]
+
+covariates <- list("female",
+                   "arab", 
+                   "ethiopian", 
+                   "married", 
+                   "children", 
+                   "immigrant", 
+                   "slfrep_healthlimit", 
+                   "age", 
+                   "single_parent", 
+                   "ultraorthodox",
+                   "circlespop",
+                   "matriculation",
+                   "log_N_m_TC",
+                   "unemployment_rate_locality",
+                   "log_work_force_locality",
+                   "log_total_pop_2017",
+                   "log_pop_in_age",
+                   "soc_index_todate")
+
+```
+
+
+```{r include=FALSE}
+est_table <- function(title, data1, data2, data3, data4, title1, title2, title3, title4, note, filter = "All", Q = "Q_Full") {
+  
+    Q_name <- "$Q^{FH}$"
+    Q_name_interaction <- "$TQ^{FH}$"
+    data1 <- data1 %>% filter(get(filter) == 1) %>% mutate(treatedQ = treated* Q_Full)
+    data2 <- data2 %>% filter(get(filter) == 1) %>% mutate(treatedQ = treated* Q_Full)
+    data3 <- data3 %>% filter(get(filter) == 1) %>% mutate(treatedQ = treated* Q_Full)
+    data4 <- data4 %>% filter(get(filter) == 1) %>% mutate(treatedQ = treated* Q_Full)
+  
+  spec_DIM <- as.formula(paste("cumul_abs", 
+                               " ~ treated + ",
+                               paste(covariates, collapse = "+"), 
+                               "| allocation_unit| 0 | allocation_unit",
+                               sep = ""))
+  
+  spec_RF <- as.formula(paste("cumul_abs", 
+                              " ~ treated + Q_m_self + treated:Q_m_self +",
+                              paste(covariates, collapse = "+"), 
+                              "| allocation_unit| 0 | allocation_unit + markets",
+                              sep = ""))
+  
+  spec_F1 <- as.formula(paste(Q, 
+                              " ~ treated + Q_m_self + treated:Q_m_self +",
+                              paste(covariates, collapse = "+"), 
+                              "| allocation_unit| 0 | allocation_unit + markets",
+                              sep = ""))
+  
+  spec_F2 <- as.formula(paste("treatedQ", 
+                              " ~ treated + Q_m_self + treated:Q_m_self +",
+                              paste(covariates, collapse = "+"), 
+                              "| allocation_unit| 0 | allocation_unit + markets",
+                              sep = ""))
+  
+  spec_SS <- as.formula(paste("cumul_abs",
+                              " ~ treated + ",
+                              paste(covariates, collapse = "+"), 
+                              "| allocation_unit| ( treatedQ |",Q," ~ Q_m_self + treated:Q_m_self ) | allocation_unit + markets",
+                              sep = ""))
+  
+  # Panel A - DIM
+  
+  DIM1 <- felm(formula = spec_DIM, psdef = FALSE, data = data1)
+  DIM2 <- felm(formula = spec_DIM, psdef = FALSE, data = data2)
+  DIM3 <- felm(formula = spec_DIM, psdef = FALSE, data = data3)
+  DIM4 <- felm(formula = spec_DIM, psdef = FALSE, data = data4)
+  
+  # Panel B - Reduced Form
+  
+  RF1 <- felm(formula = spec_RF, psdef = FALSE, data = data1)
+  RF2 <- felm(formula = spec_RF, psdef = FALSE, data = data2)
+  RF3 <- felm(formula = spec_RF, psdef = FALSE, data = data3)
+  RF4 <- felm(formula = spec_RF, psdef = FALSE, data = data4)
+  
+  # Panel C - First Stage 1
+  
+  FS11 <- felm(formula = spec_F1, psdef = FALSE, data = data1)
+  FS12 <- felm(formula = spec_F1, psdef = FALSE, data = data2)
+  FS13 <- felm(formula = spec_F1, psdef = FALSE, data = data3)
+  FS14 <- felm(formula = spec_F1, psdef = FALSE, data = data4)
+  
+  # Panel D - First Stage 2
+  
+  FS21 <- felm(formula = spec_F2, psdef = FALSE, data = data1)
+  FS22 <- felm(formula = spec_F2, psdef = FALSE, data = data2)
+  FS23 <- felm(formula = spec_F2, psdef = FALSE, data = data3)
+  FS24 <- felm(formula = spec_F2, psdef = FALSE, data = data4)
+  
+  # Panel E - Second Stage
+  
+  SS1 <- felm(formula = spec_SS, psdef = FALSE, data = data1)
+  SS2 <- felm(formula = spec_SS, psdef = FALSE, data = data2)
+  SS3 <- felm(formula = spec_SS, psdef = FALSE, data = data3)
+  SS4 <- felm(formula = spec_SS, psdef = FALSE, data = data4)
+  
+  # Statistics
+  y1 <- round(mean(data1$cumul_abs[which(data1$treated==0)]),2)
+  y2 <- round(mean(data2$cumul_abs[which(data2$treated==0)]),2)
+  y3 <- round(mean(data3$cumul_abs[which(data3$treated==0)]),2)
+  y4 <- round(mean(data4$cumul_abs[which(data4$treated==0)]),2)
+  
+  F11 <- round(condfstat(SS1, type = "cluster")[,Q],2)
+  F12 <- round(condfstat(SS2, type = "cluster")[,Q],2)
+  F13 <- round(condfstat(SS3, type = "cluster")[,Q],2)
+  F14 <- round(condfstat(SS4, type = "cluster")[,Q],2)
+  F21 <- round(condfstat(SS1, type = "cluster")[,"treatedQ"],2)
+  F22 <- round(condfstat(SS2, type = "cluster")[,"treatedQ"],2)
+  F23 <- round(condfstat(SS3, type = "cluster")[,"treatedQ"],2)
+  F24 <- round(condfstat(SS4, type = "cluster")[,"treatedQ"],2)
+  
+  Q_bar1 <- round(mean(data1 %>% pull(Q)),3)
+  Q_bar2 <- round(mean(data2 %>% pull(Q)),3)
+  Q_bar3 <- round(mean(data3 %>% pull(Q)),3)
+  Q_bar4 <- round(mean(data4 %>% pull(Q)),3)
+  
+  Q_ms_bar1 <- round(mean(data1 %>% pull(Q_m_self)),3)
+  Q_ms_bar2 <- round(mean(data2 %>% pull(Q_m_self)),3)
+  Q_ms_bar3 <- round(mean(data3 %>% pull(Q_m_self)),3)
+  Q_ms_bar4 <- round(mean(data4 %>% pull(Q_m_self)),3)
+  
+  # Combining the tables:
+  result <- star_panel(stargazer(DIM1, DIM2, DIM3, DIM4,
+                                 title = title,
+                                 dep.var.labels   = " \ ",
+                                 dep.var.caption = " ",
+                                 type = "latex",
+                                 table.placement = "H",
+                                 column.labels   = c(title1, title2, title3, title4),
+                                 keep = c("treated"),
+                                 covariate.labels = c("$T$"),
+                                 report = "vc*sp",
+                                 digits = 3,
+                                 keep.stat = c("n"),
+                                 model.numbers = FALSE,
+                                 header = FALSE,
+                                 column.sep.width = "35pt"), 
+                       stargazer(RF1, RF2, RF3, RF4,
+                                 dep.var.labels   = " \ ",
+                                 dep.var.caption = " ",
+                                 type = "latex",
+                                 table.placement = "H",
+                                 column.labels   = c(title1, title2, title3, title4),
+                                 keep = c("treated", "treated:Q_m_self", "Q_m_self"),
+                                 covariate.labels = c("$T$", "$T Q_{m,self}$", "$Q_{m,self}$"),
+                                 report = "vc*sp",
+                                 digits = 3,
+                                 keep.stat = c("n"),
+                                 model.numbers = FALSE,
+                                 header = FALSE), 
+                       stargazer(FS11, FS12, FS13, FS14,
+                                 dep.var.labels   = " \ ",
+                                 dep.var.caption = " ",
+                                 type = "latex",
+                                 table.placement = "H",
+                                 column.labels   = c(title1, title2, title3, title4),
+                                 keep = c("Q_m_self", "Q_m_self:treated"),
+                                 covariate.labels = c("$Q_{m,self}$", "$T Q_{m,self}$"),
+                                 report = "vc*sp",
+                                 digits = 3,
+                                 keep.stat = c("n"),
+                                 model.numbers = FALSE,
+                                 header = FALSE),
+                       stargazer(FS21, FS22, FS23, FS24,
+                                 dep.var.labels   = " \ ",
+                                 dep.var.caption = "  ",
+                                 type = "latex",
+                                 table.placement = "H",
+                                 column.labels   = c(title1, title2, title3, title4),
+                                 keep = c("Q_m_self", "Q_m_self:treated"),
+                                 covariate.labels = c("$Q_{m,self}$", "$TQ_{m,self} $"),
+                                 report = "vc*sp",
+                                 digits = 3,
+                                 keep.stat = c("n"),
+                                 model.numbers = FALSE,
+                                 header = FALSE),
+                       stargazer(SS1, SS2, SS3, SS4,
+                                 dep.var.labels   = " \ ",
+                                 dep.var.caption = " ",
+                                 type = "latex",
+                                 table.placement = "H",
+                                 column.labels   = c(title1, title2, title3, title4),
+                                 keep = c(Q, "treatedQ", "treated"),
+                                 covariate.labels = c("$T$", Q_name_interaction, Q_name),
+                                 report = "vc*sp",
+                                 digits = 3,
+                                 keep.stat = c("n"),
+                                 model.numbers = FALSE,
+                                 header = FALSE), 
+                       panel.names = c("Difference in Means", "Reduced Form", "First Stage - $Q^{FH}$", "First Stage - $T Q^{FH}$", "Second Stage")) %>%
+    star_insert_row(string = paste("$Average \\ Y_{Control}$ &", as.character(y1),"&", as.character(y2),"&", as.character(y3),"&", as.character(y4), "\\\\"), insert.after = 17) %>%
+    star_insert_row(string = paste("$Average \\ Q_{m,self}$ &", as.character(Q_ms_bar1),"&", as.character(Q_ms_bar2),"&", as.character(Q_ms_bar3),"&", as.character(Q_ms_bar4), "\\\\"), insert.after = 32) %>%
+    star_insert_row(string = paste("$F_{stat}$ &", as.character(F11),"&", as.character(F12),"&", as.character(F13),"&", as.character(F14), "\\\\"), insert.after = 43) %>%
+    star_insert_row(string = paste("$F_{stat}$ &", as.character(F21),"&", as.character(F22),"&", as.character(F23),"&", as.character(F24), "\\\\"), insert.after = 54) %>%
+    star_insert_row(string = paste("$Average \\ Q^{FH}$ &", as.character(Q_bar1),"&", as.character(Q_bar2),"&", as.character(Q_bar3),"&", as.character(Q_bar4), "\\\\"), insert.after = 69) %>%
+    star_notes_tex(note.type = "threeparttable",
+                   note = note)
+  
+  return(result)
+  
+}
+
+Baseline_All <- est_table(data1 = data, 
+                          data2 = data_U, 
+                          data3 = data_N, 
+                          data4 = data_m, 
+                          filter = "All", 
+                          title = "Baseline - Regression Results for Locality-Based Markets", 
+                          title1 = "All", 
+                          title2 = "High Unemp.", 
+                          title3 = "High N Ratio", 
+                          title4 = "Small Markets", 
+                          note = "This table reports the estimation results for locality-based markets, using the $Q^{FH}$ intensity measure, of the following regressions: difference-in-means, reduced-form, two first-stage equations and second-stage. All of the regressions include allocation-unit fixed-effects, as well as the set of background characteristics. Standard errors are in parentheses. In panel A, the main variable is the treatment value indicator. In this panel, the standard errors are clustered at the allocation-unit level only. In the rest of the estimations, the standard errors are clustered at both the allocation-unit and at the market level. Panels B report the estimates of the reduced-form interaction model of Y on $Q_{m,self}$. Sanderson-Windmeijer (2014) conditional F statistic are reported at the bottom of panels C and D. Panel E reports the second stage IV estimates. The average $Q$ is reported at the bottom of panels B and E. The estimations are performed on four sub-samples: all available observations; markets with high unemployment rate (above the 75th percentile); markets with high amount of participants in the RWG relative to the local labor force (above the median); and markets with less than 15,000 residents in the ages 20-59 (2015). All samples contain only IA recepients only. In addition, individuals who last reported to thier local employment office before their allocation date are excluded from all samples, as they could not have been influnced by their treatment status.")
+
+Baseline_arb <- est_table(data1 = data, 
+                          data2 = data_U, 
+                          data3 = data_N, 
+                          data4 = data_m, 
+                          filter = "arab", 
+                          title = "Regression Results for Locality-Based Markets - Arabs Only", 
+                          title1 = "All", 
+                          title2 = "High Unemp.", 
+                          title3 = "High N Ratio", 
+                          title4 = "Small Markets", 
+                          note = "This table reports the estimation results for Arabs in locality-based markets, using the $Q^{FH}$ intensity measure, of the following regressions: difference-in-means, reduced-form, two first-stage equations and second-stage. All of the regressions include allocation-unit fixed-effects, as well as the set of background characteristics. Standard errors are in parentheses. In panel A, the main variable is the treatment value indicator. In this panel, the standard errors are clustered at the allocation-unit level only. In the rest of the estimations, the standard errors are clustered at both the allocation-unit and at the market level. Panels B report the estimates of the reduced-form interaction model of Y on $Q_{m,self}$. Sanderson-Windmeijer (2014) conditional F statistic are reported at the bottom of panels C and D. Panel E reports the second stage IV estimates. The average $Q$ is reported at the bottom of panels B and E. The estimations are performed on four sub-samples: all available observations; markets with high unemployment rate (above the 75th percentile); markets with high amount of participants in the RWG relative to the local labor force (above the median); and markets with less than 15,000 residents in the ages 20-59 (2015). All samples contain only IA recepients only. In addition, individuals who last reported to thier local employment office before their allocation date are excluded from all samples, as they could not have been influnced by their treatment status.")
+
+Baseline_fem <- est_table(data1 = data, 
+                          data2 = data_U, 
+                          data3 = data_N, 
+                          data4 = data_m, 
+                          filter = "arab", 
+                          title = "Regression Results for Locality-Based Markets - Females Only", 
+                          title1 = "All", 
+                          title2 = "High Unemp.", 
+                          title3 = "High N Ratio", 
+                          title4 = "Small Markets", 
+                          note = "This table reports the estimation results for females in locality-based markets, using the $Q^{FH}$ intensity measure, of the following regressions: difference-in-means, reduced-form, two first-stage equations and second-stage. All of the regressions include allocation-unit fixed-effects, as well as the set of background characteristics. Standard errors are in parentheses. In panel A, the main variable is the treatment value indicator. In this panel, the standard errors are clustered at the allocation-unit level only. In the rest of the estimations, the standard errors are clustered at both the allocation-unit and at the market level. Panels B report the estimates of the reduced-form interaction model of Y on $Q_{m,self}$. Sanderson-Windmeijer (2014) conditional F statistic are reported at the bottom of panels C and D. Panel E reports the second stage IV estimates. The average $Q$ is reported at the bottom of panels B and E. The estimations are performed on four sub-samples: all available observations; markets with high unemployment rate (above the 75th percentile); markets with high amount of participants in the RWG relative to the local labor force (above the median); and markets with less than 15,000 residents in the ages 20-59 (2015). All samples contain only IA recepients only. In addition, individuals who last reported to thier local employment office before their allocation date are excluded from all samples, as they could not have been influnced by their treatment status.")
+
+Proximit_All <- est_table(data1 = dataKAll, 
+                          data2 = dataK140, 
+                          data3 = dataK120, 
+                          data4 = dataK100, 
+                          filter = "All", 
+                          title = "Regression Results for Proximity-Based Markets", 
+                          title1 = "$K = 219$", 
+                          title2 = "$K = 140$", 
+                          title3 = "$K = 120$", 
+                          title4 = "$K = 100$", 
+                          note = "This table reports the estimation results for proximity-based markets (geographical proximity interatced with gender and ethnic background), using the $Q^{FH}$ intensity measure, of the following regressions: difference-in-means, reduced-form, two first-stage equations and second-stage. All of the regressions include allocation-unit fixed-effects, as well as the set of background characteristics. Standard errors are in parentheses. In panel A, the main variable is the treatment value indicator. In this panel, the standard errors are clustered at the allocation-unit level only. In the rest of the estimations, the standard errors are clustered at both the allocation-unit and at the market level. Panels B report the estimates of the reduced-form interaction model of Y on $Q_{m,self}$. Sanderson-Windmeijer (2014) conditional F statistic are reported at the bottom of panels C and D. Panel E reports the second stage IV estimates. The average $Q$ is reported at the bottom of panels B and E. The estimations are performed with respect to four geographical segmentations which define the markets: segmentation by locality ($K=219$); segmentation by the results of K-mean clustring of the XY coordinates of the localities in the sample, for $K<219$. All samples contain only IA recepients only. In addition, individuals who last reported to thier local employment office before their allocation date are excluded from all samples, as they could not have been influnced by their treatment status.")
+
+```
+
+---
+\newpage
+\renewcommand{\arraystretch}{0.7}
+
+```{r echo = FALSE, results ="asis"}
+
+cat(Baseline_All)
+cat(Baseline_arb)
+cat(Baseline_fem)
+cat(Proximit_All)
+
+```
+
+\renewcommand{\arraystretch}{1}
+
+

@@ -1,0 +1,764 @@
+---
+title: "Do Labor Market Policies have Positive Externalities? Evidence from a Ranomized Experiment"
+subtitle: "Advisers: Dr. Analia Shlosser  &  Dr. Itay Saporta Eksten"
+author: "Gilad Gaibel"
+date: "June 18, 2019"
+output: 
+  ioslides_presentation:
+    widescreen: true
+    smaller: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+pacman::p_load("readr",  # A packge for dealing with CSVs
+               "stats",
+               "ggplot2",
+               "gtable",
+               "gridExtra",
+               "ggthemes",
+               "lfe", # For easy OLS with FEs and clustered errors
+               "plm",
+               "StatMeasures",
+               "DescTools",
+               "broom",
+               "knitr",
+               "dplyr") # For data manipulation
+
+# Loading the main dataset:
+load("Program_Data.Rdata")
+attach(Full_Data)
+
+group_stats <- function(data) {
+  
+  # Dividing the data to groups
+  data$groups <- data %>% 
+    group_by(arab, cityid) %>% 
+    group_indices
+  
+  # Generating the weights for the weighted aggregation
+  data$weights <- dnorm(data$t,5,5)
+  data$weights <- data$weights/sum(data$weights[which(data$t<=12)])
+  
+  # Generating the numerators of P
+  data <- data %>%
+    filter(relevant==1) %>%
+    group_by(groups, real_time) %>%
+    mutate(uniform_aggragation = sum(treated),
+           limited_uniform_aggregation = sum(treated[which(t<=12)]),
+           limited_weighted_aggregation = sum(treated[which(t<=12)] * weights[which(t<=12)]))
+  
+  # Generating group's sizes
+  data <- data %>%
+    group_by(groups) %>%
+    mutate(N_g = length(treated) / max(t))
+
+  # Generating the local proportions of treatment
+  data <- data %>%
+    mutate(P_uniform_aggragation = uniform_aggragation/N_g,
+           P_limited_uniform_aggregation = limited_uniform_aggregation/N_g,
+           P_limited_weighted_aggregation = limited_weighted_aggregation/N_g) %>%
+    filter(spells >=12 & t==12)  
+    
+  # Generating variables for f(N_g)
+  data <- data %>% 
+    group_by(N_g) %>% 
+    mutate(size_tag = row_number()) %>%
+    ungroup() %>%
+    group_by(size_tag) %>%
+    mutate(levels_N_g = ntile(N_g, 20)) %>%
+    ungroup() %>%
+    group_by(N_g) %>% 
+    mutate(levels_N_g = levels_N_g[which(size_tag==1)])
+  data$log_N_g <- log(data$N_g)
+
+  return(data)
+}
+
+data <- Full_Data %>%
+        group_stats
+
+data_with_treatment <- data
+#load("Processed_data_with_treatment.Rdata")
+data <- data_with_treatment %>% filter(treated==0)
+```
+
+## Outline
+
+- Introduction
+- Program Description
+- Experimental Design and Data
+- Empirical Strategy
+- Perliminary Results
+- Future Plans
+
+## Introduction
+
+- ALMPs are quite common in developed countries (Crépon and Van Der Berg 2016).
+- There is a growing amount of experimental research in this area.
+- Bonus programs evaluations: Woodbury and Spiegelman (1987); Meyer (1995); Card and Hyslop (2005); Van Der Klaauw and Van Ours (2013); Ahn (2018).
+ - Experimental results found that bonuses usually cause faster return to employment (Crépon and Van Der Berg 2016)
+ - Programs are commonly evaluated by differences in means between treatment and control.
+ - An important criticism against these studies is that they miss equilibrium effects.
+ - Crepon *et al*. (2013) study biases on acount of externalities directly.
+ 
+## Introduction - Crepon *et al*. (2013)
+
+- Research question: Do labor market policies have **displacement effects**?
+- Two-way clustered randimized experiment for a job-search assistance in France.
+- Targeted at young educated job seekers with at least 6 months seniority in unemployment.
+- "Naive" evaluations are consistent with prior research - positive effects.
+- Variation in local proportions of participants assigned to treatment allow for a reduced form exteranlities model.
+- Main interest in a crowding-out effect, motivated by a DMP model with decreasing returns to scale.
+- Main results are insignificant.
+- Bottom line: "More broadly, our results are suggestive of externalities which should be taken into acount when evaluating any labor market policy."
+
+## Introduction - Research Question
+
+Following the lines  of Crepon *et al*. (2013), I also study externalities in an RCT which is designed to evaluate a reemployment bonus program in Israel. I, however, focus on positive externalities.
+
+My research questions are:
+ $$\hspace{0.5cm}$$
+
+-  **General research question: Do labor market policies have positive externalities?**
+-  **Focused research question: Do the RWG program have positive externalities in the local-groups level?**
+ 
+## Introduction - RWG
+
+- Remote Work Grant (RWG) program.
+- Clustered randomized experiment for a reemployment lump-sum bonus program.
+- Targeted at unemployed UI beneficiaries with different degrees of seniority, living in peripherial areas in Israel.
+- Aimed at removing light-barriers with respect to commuting costs, in order to expand the opportunities horizon of the program's population.
+- Displacement effects are less likely since the treatment group is encouraged to work outside their usual geographic bounds of labor supply.
+- Positive externalities, however, seem more likely and I focus on them.
+
+## Introduction - RWG
+
+- Possible channels: network effects, decrease in competition on local vacancies.
+- These two channels are actually relevant to both treatment and control.
+- However, I don't see a good reason to think that they are with fixed proportion.
+
+
+## Introduction - Motivations
+
+- ALMPs are very popular in countries all over the world.
+- Violation of SUTVA leads to biased ITT/TOT estimations.
+- Deepen the way economists understand how labor-markets function. (Economic Research)
+- Identifiying and charcterizing externalities is essential to understand, and thus better-design, ALMPs. (Policy)
+- Better evaluation of RWG.
+- Sheds light on the effect of Israeli sociology on unemployment.
+
+## Introduction - Contributions
+
+- Direct estimation of externalities in a reemployment bonus program.
+- Experimental evidence for positive rather than negative effects.
+- Possibly a characterization of the channels of such effect.
+- Better evaluation of RWG.
+
+## RWG - Program Description
+
+- In 2016, the Israeli Employment Service (IES) began operating the Remote Work Grant (RWG).
+- The program is targeted at unemployed individuals who live in peripheral areas in Israel.
+- A salary bonus of 600 NIS is offered for a period of 5 months to entitled individuals who found a job outside their locality of residence within 3 months of the offer. Monthly eligibility depends on work of at least 11 days in the remote job.
+- Initial entitelment is determined randomly.
+- The randomization is done within pools of different seniority in unemployment, local employment office and date. (Stratified experiment; all econometric specifications includes allocation unit FEs, i.e. strata FEs)
+
+## Data
+
+- Administrative data from the IES. Includes treatment status, socio-demographic background variables, locality of residence, monthly registration indicators in the local office, grant realizations.
+
+- In-depth surveys done before the allocation date, 3 months after allocation and 12 months after allocation.
+
+## Empirical Strategy - Local proportions
+
+Following the lines of Crepon *et al*. (2013), I use variation in localy defined proportion of treatment ($P_g$) as a continuous measure of local-group experience of the intensity of the treatment.
+ $$\hspace{0.5cm}$$
+A group $g$ is defined initially as the total number of either Arab or non-Arab treatment and control observations which reported as living in a certian locality.
+
+The cardinality of group $g$, denoted by $N_g$ is time invariant and within-group invariant.
+
+## Empirical Strategy - Introducing P
+
+The simple version of $P_g$ is defined as follows:
+
+$$P_{g} = \frac{\sum_{i \in g} T_{i,g}}{N_g}$$ 
+
+Note that $T_{i,g}$ is Bernoulli distributed with parameter $p$ (the prior distribution for being assigned to treatment), and therefore $\sum_{i \in g} T_{i,g}$ is Binomially distributed with parameters $N_g,p$ as a sum of indepenent Bernoulli random varaibles. 
+
+## Empirical Strategy - General Properties of P
+
+Hence the properties:
+
+$$(1) \hspace{0.5cm} E(P_g | N_g) = E(\frac{\sum_{i \in g} T_{i,g}}{N_g} | N_g)$$
+$$ = \frac{1}{N_g}E(\sum_{i \in g} T_{i,g}) = \frac{N_gp}{N_g}$$
+$$= p$$
+
+## Empirical Strategy - General Properties of P
+ 
+  
+$$(2) \hspace{0.5cm} Var(P_g | N_g) = Var(\frac{\sum_{i \in g} T_{i,g}}{N_g} | N_g) $$
+$$= \frac{1}{N_g^2}Var(\sum_{i \in g} T_{i,g}) = \frac{N_gp(1-p)}{N_g^2}$$
+$$ = \frac{p(1-p)}{N_g}$$
+
+## Empirical Strategy - General Properties of P
+
+- Property (1) implies that, controlling for group size, the expected value of $P_g$ is independent of any other variable.
+
+- The other side of the coin is that $N_g$ is a potential confounder.
+
+- Property (2) implies that the variance converges to 0 as $N_g$ goes to infinity.
+
+- This can pose a problem of power.
+
+## Empirical Strategy - Variatoin of P
+
+There is some degree of freedom in the exact formulation of $P_{g,a}$, depending on which treated observations will be included in the numerator and how. I will exploit that fact to estimate a few versions of the empirical models with respect to different definitions of $P$, by different definitions of the numerator:
+
+- **Uniform Aggregation**: Sum over all treated observations in group $g$ who were in the program at the 12th month since the allocation month of $i$.
+
+- **Limited Uniform Aggregation**: include in the numerator only treated observations with lower seniority than some amount of months. I choose this amount to be 12.
+
+- **Limited Weighted Aggregation**: Assign weights to each month since allocation and sum over the weighted treatment status values. A simple visualization is with a normal-shaped ($\mu =5, \sigma =5$) weights function over the 12 months since allocation, which may potentially represent the intensity of the spillover:
+
+```{r echo = FALSE, fig.height = 1.5, fig.width = 2}
+ggplot(data = data.frame(x = c(1, 12)), aes(x)) +
+  stat_function(fun = dnorm, n = 101, args = list(mean = 5, sd = 5)) + ylab("") + xlab("Time") +
+  scale_y_continuous(breaks = seq(1,12))
+```
+
+## Empirical Strategy - Visualisations of P
+
+```{r echo=FALSE}
+ggplot(data, aes(x=N_g)) + 
+   geom_histogram(aes(y=..density..), colour="black", fill="white", bins = 20 )+
+   geom_density(alpha=.2, fill="#FF6666", bw = sd(data$N_g)/2)+
+    labs(x = "N_g", title = "Distribution of Group-Size")
+```
+
+
+## Empirical Strategy -  Visualisations of P
+
+```{r echo = FALSE, warning=FALSE}
+
+hist_scatter <- function(P_name, title, data) {
+  
+  model_temp <- felm(formula = get(P_name) ~ as.factor(levels_N_g) | month_lishka_pool| 0 | month_lishka_pool, data)
+  data$residuals <- model_temp$residuals
+  
+  hist <- ggplot(data, aes(x=residuals)) + 
+   geom_histogram(aes(y=..density..), colour="black", fill="white", bins = 40 )+
+   geom_density(alpha=.2, fill="#FF6666", bw = sd(model_temp$residuals)/2)+
+    labs(x = "P (Residuals)")
+  
+  scatter <- ggplot(data) +
+    geom_point(aes(x = N_g, y = residuals)) +
+    labs(x = "Group's Size",
+         y = "P (Residuals)")
+  
+  grid.arrange(hist, scatter, 
+               nrow = 1, 
+               top = title)
+}
+
+hist_scatter("P_uniform_aggragation","P (Uniform Aggragation)", data)
+
+
+```
+
+Note: values of P are the residuals from a regression of P on allocation unit FEs and levels of $N_g$ FEs.
+
+## Empirical Strategy -  Visualisations of P
+```{r echo = FALSE, warning=FALSE}
+hist_scatter("P_limited_uniform_aggregation","P (Limited Uniform Aggragation)", data)
+
+```
+
+Note: values of P are the residuals from a regression of P on allocation unit FEs and levels of $N_g$ FEs.
+
+
+## Empirical Strategy -  Visualisations of P
+```{r echo = FALSE, warning=FALSE}
+hist_scatter("P_limited_weighted_aggregation","P (Limited Weighted Aggragation)", data)
+
+```
+
+Note: values of P are the residuals from a regression of P on allocation unit FEs and levels of $N_g$ FEs.
+
+
+## Empirical Strategy - Main Outcome
+
+The main outcome variable I use is the sum of a monthly set of individual-level indicators for appearance in the local employment office, over the first year since allocation.
+
+- The importance of appearing in the employment office for each individual is that it is a condition for recieveng UI benefit or income support.
+- That said, no-appearance is assumed to be the result of either a job-seeker found a job, or she became discouraged. The former is more likely.
+- A difference between treatment and control with respect to this sum proxies a difference in the length of time in employment during the first year since allocation.
+
+
+
+## Empirical Strategy - $M_{a}$
+
+Following Crepon *et al.* (2013), the first model is a fully-unconstrained reduced form model:
+
+$$(M_{a}) \hspace{0.5cm} y_{i,g,a} = \sum_{k=1}^{K}\beta_k T_{i,a} P_{k,a} + \sum_{j=2}^K \delta_k P_{k,a} + \gamma X_{i} + \phi_a + f(N_g) + e_{i,g,a} $$
+
+- $K$ is a number of bins of $P$ (a choice parameter).
+- $T$ is the treatment status indicator.
+- $P_k$ is an indicator for belonging to the $k$th bin of $P$. Hence $TP_k$ is an indicator for being assigned to treatment in the $k$th level of $P$.
+- $y$ is the outcome of interest.
+- $X$ is a vector of individual-level chrecteristics.
+- $\phi$ is allocation-unit fixed effects.
+- $f(N_g)$ is a functional form of $N_g$ - I use levels FEs. 
+- The indices $i,g,a$ stand for individual, group and allocation-unit respectively. 
+
+
+## Empirical Strategy - $M_{a}$
+
+
+$$(M_{a}) \hspace{0.5cm} y_{i,g,a} = \sum_{k=1}^{K}\beta_k T_{i,a} P_{k,a} + \sum_{j=2}^K \delta_k P_{k,a} + \gamma X_{i} + \phi_a + f(N_g) + e_{i,g,a} $$
+
+- $\beta_k$ measures the effect of being assigned to treatment reletive to being assigned to control in groups with close values of $P$, within allocation unit. 
+- $\delta_k$ measures the effect of being assigned to control in a group within the bin $k$, reletive to being assigned to control in the 1st bin (base catagory)
+
+The main hypothesis is that the $\delta$s are decreasing in $k$. I perform two statistical tests for the presence of externalities (as Crepon *et al.* (2013)): (1) whether all $\delta$s are joinly zero, and (2) whether they jointly equal to each other.
+Also, if the $\beta$s are decreasing in $P$ it could suggest the presence of positive externalities.
+
+**Note: This model is estimated on both treatment and control.**
+
+## Empirical Strategy - $M_{c}$
+
+The second model is:
+
+$$(M_{c}) \hspace{0.5cm} y_{i,g,a} = \beta_0 + \beta_1 P_{g,a} + \gamma X_{i} + \phi_a + f(N_g) + \varepsilon_{i,g,a} $$
+
+- The main parameter of interest is $\beta_1$, which signifies here the effect of a change in the local proportion of treated individuals on the outcome $y$.
+- **This model is estimated only for the control group in order to capture externalities.**
+- The advatage of this model is directly estimating the slope of $\beta$.
+
+$$\hspace{0.5cm}$$
+
+The main hypothesis is that positive externalities play a role in the experiment, therefore I test for the negativity of $\beta_1$ (one-sided test).
+
+## Empirical Strategy
+
+Additional notes:
+
+- $P_{g,a}$ changes across two dimensions - groups and time (allocation unit). This requires a functional form of $N_g$.
+
+- $P_{g,a}$ is determined *ex-post*. This forms a selection in terms of treament staus, however in large enough groups it can be considered negligable.
+
+- Each employment office is responsible for s defined set of localities, so $P_{g,a}$ varies within allocation unit.
+
+
+## Identification - Assumptions
+
+The main identification assumptions is exogeneity of $T$ and $P$ with respect to the propper population. Or formally:
+$$\hspace{0.5cm}$$
+$$(1)  \hspace{0.5cm} E(T_{i,a} \varepsilon_{i,g,a}| \phi_a) = 0$$
+$$\hspace{0.5cm}$$
+
+This assumption is satisfied by design. I also perform orthogonality tests to verify that there is no selection in the sample.
+
+## Identification - Assumptions
+
+
+$$(2.M_a)   \hspace{0.5cm} E(P_{g,a} \varepsilon_{i,g,a}| f(N_g), \phi_a) = 0$$
+
+
+$$(2.M_c) \hspace{0.5cm} E(P_{g,a} \varepsilon_{i,g,a}| f(N_g), \phi_a, {T_i = 0}) = 0$$
+$$\hspace{0.5cm}$$
+
+
+- Intuitively, since the treatment is given in random on the office level, which is responsible for a set of localities, local proportions should be determined randomly, given $N_g$. 
+- In order to avoid confoundeding issues, there must be a proper functional form for $f(N_g)$. The models below will include fixed-effects for levels of $N_g$. However, this is a major issue with respect to the validity of the models. 
+
+## Identification - Orthogonality Tests
+
+Balance test of $T_i$ is performed by running a regression of observables on the treatment indicator and allocation unit fixed effects in the sample with the treatment group (SEs are clustered at the allocation unit level). The following table reports means of the covariates within treatment arms, and p-values for equality tests.
+
+---
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+
+
+balance_T <- function(covariate_name, data) {
+  
+  attach(data)
+  model_temp <- felm(formula = get(covariate_name) ~ treated | month_lishka_pool| 0 | month_lishka_pool, data)
+  
+  model_row <- tidy(model_temp) %>% 
+              mutate(Covariates = covariate_name) %>%
+              mutate(N = model_temp$N,
+                     T = mean(get(covariate_name)[which(treated==1)], na.rm = TRUE),
+                     C = mean(get(covariate_name)[which(treated==0)], na.rm = TRUE),
+                     Estimate = estimate) %>%
+              select(Covariates, T, C, Estimate, p.value, N)
+  assign(paste0("est_",covariate_name),model_row)
+  return(get(paste0("est_",covariate_name)))
+}
+
+covariates <- list("female",
+                   "arab", 
+                   "ethiopian", 
+                   "married", 
+                   "children", 
+                   "immigrant", 
+                   "slfrep_healthlimit", 
+                   "age", 
+                   "single_parent", 
+                   "ultraorthodox")
+
+kable(bind_rows(lapply(covariates, balance_T, data=data_with_treatment)), 
+      digits = 3,
+      caption = "Treatment Balance and Summary Statistics",
+      padding = 0)
+
+```
+
+
+## Identification - Orthogonality Tests
+
+It turns out that there is a minor selection for females and ultraorthodox in the sample, however it has no economic significance. Overall, the estimates are very small and statistically insignificant.
+  
+
+An analogous test on the $P$ variables, controlling also for levels of $N_g$ (SEs are clustered at the allocation unit level. $P$ is standardized for easier interpretability):
+
+---
+
+```{r echo=FALSE}
+
+balance <- function(covariate_name, treament_name ,data) {
+  
+  data <- data %>% mutate(P_uniform_aggragation = scale(P_uniform_aggragation),
+                          P_limited_uniform_aggregation = scale(P_limited_uniform_aggregation),
+                          P_limited_weighted_aggregation = scale(P_limited_weighted_aggregation))
+  
+  model_temp <- felm(formula = get(covariate_name) ~ get(treament_name) | month_lishka_pool+levels_N_g| 0 | month_lishka_pool, data)
+  
+  model_row <- tidy(model_temp) %>% 
+              slice(1) %>%
+              mutate(Covariates = paste0("Association with ",covariate_name)) %>%
+              mutate(N = model_temp$N, Estimate = estimate) %>%
+              select(Covariates, Estimate, p.value, N)
+  assign(paste0("est_",covariate_name),model_row)
+  return(get(paste0("est_",covariate_name)))
+}
+
+covariates <- list("female",
+                   "arab", 
+                   "ethiopian", 
+                   "married", 
+                   "children", 
+                   "immigrant", 
+                   "slfrep_healthlimit", 
+                   "age", 
+                   "single_parent", 
+                   "ultraorthodox")
+
+kable(bind_rows(lapply(covariates, balance, treament_name = "P_uniform_aggragation", data=data_with_treatment)), 
+      digits = 3,
+      caption = "P_uniform_aggragation (standardized) Balance - Pooled Sample",
+      padding = 0)
+
+```
+
+
+---
+
+```{r echo=FALSE}
+kable(bind_rows(lapply(covariates, balance, treament_name = "P_uniform_aggragation", data=data)), 
+      digits = 3,
+      caption = "P_uniform_aggragation (standardized) Balance - Control Only",
+      padding = 0)
+```
+
+---
+
+```{r echo=FALSE}
+kable(bind_rows(lapply(covariates, balance, treament_name = "P_limited_uniform_aggregation", data=data_with_treatment)), 
+      digits = 3,
+      caption = "P_limited_uniform_aggregation (standardized) Balance - Pooled Sample",
+      padding = 0)
+```
+
+---
+
+```{r echo=FALSE}
+kable(bind_rows(lapply(covariates, balance, treament_name = "P_limited_uniform_aggregation", data=data)), 
+      digits = 3,
+      caption = "P_limited_uniform_aggregation (standardized) Balance - Control Only",
+      padding = 0)
+```
+
+---
+
+```{r echo=FALSE}
+kable(bind_rows(lapply(covariates, balance, treament_name = "P_limited_weighted_aggregation", data=data_with_treatment)), 
+      digits = 3,
+      caption = "P_limited_weighted_aggregation (standardized) Balance - Pooled Sample",
+      padding = 0)
+```
+
+---
+
+```{r echo=FALSE}
+kable(bind_rows(lapply(covariates, balance, treament_name = "P_limited_weighted_aggregation", data=data)), 
+      digits = 3,
+      caption = "P_limited_weighted_aggregation (standardized) Balance - Control Only",
+      padding = 0)
+```
+
+## Identification - Orthogonality Tests
+
+- First Best
+
+- Unfortunataly, selection in the last two definitions of P (LUA, LWA) is still an unresolved issue...
+
+
+## Perliminary Results - Means Comparison
+
+"Naive" ITT estimation by means-comparison is done with the OLS model:
+
+$$y_{i,a} = \alpha_0 + \alpha_1 T_{i,a} + \gamma X_i + \phi_a + \nu_{i,a}$$
+
+It is reasonable to expect that being assigned to treatment leads to a reduction in the amount of appearances in the first year, given that the bonus poses a positive incentive for employment, i.e. $\alpha_1$ should be negative. The estimation results on the population sample are:
+
+```{r echo = FALSE}
+
+specification  <- as.formula(num_apr_12 ~ treated + female + arab + ethiopian + married + children + immigrant + slfrep_healthlimit + age + single_parent + ultraorthodox + circlespop + matriculation | month_lishka_pool | 0 | month_lishka_pool)           
+
+# runing the regression
+ITT_simple <- felm(formula = specification , data = data_with_treatment)
+
+tidy(ITT_simple) %>% 
+  filter(term == "treated") %>%
+  mutate(model = "ITT treated") %>%
+  mutate(SE = std.error, N = ITT_simple$N) %>%
+  select(model, estimate, SE, p.value, N) %>%
+  kable(digits = 3)
+```
+
+## Perliminary Results - $M_a$
+
+```{r warning=FALSE, echo = FALSE}
+
+networks_model_Mf <- function(data, min_size, max_size, bins) {
+
+  data <- data[which(data$levels_N_g>min_size),]
+  data <- data[which(data$levels_N_g<=max_size),]
+
+  model_temp <- felm(P_uniform_aggragation ~ female + arab + ethiopian + married + children + immigrant + slfrep_healthlimit + age + single_parent + ultraorthodox + circlespop + matriculation | month_lishka_pool+levels_N_g| 0 | month_lishka_pool , data = data)
+
+  data <- data[-as.vector(unlist(model_temp$na.action)),]
+  data$adj_P <- model_temp$residuals
+
+
+  data$bins_P <- ntile(data$adj_P, bins)
+  
+  data <- data %>%
+    group_by(treated, bins_P) %>%
+    summarize(mean(num_apr_12))
+  
+}
+
+P_bins <- as.data.frame(networks_model_Mf(data = data_with_treatment, 0, 20, 6))
+
+ggplot(data=P_bins, aes(x=bins_P, y=`mean(num_apr_12)`, group=treated, col=as.factor(treated))) +
+  geom_line()+
+  geom_point() +
+  labs(x = "Bins of P (UA)",
+       y = "Mean Total Appearances",
+       color = "Treatment",
+       title = "Mean of Total Appearances Over the First Year and P (UA)")
+
+```
+
+Note: values of P are the residuals from a regression of P (UA) on allocation unit FEs, levels of $N_g$ FEs, and socio-demographic controls.
+
+## Perliminary Results - UA in $M_a$
+
+```{r warning=FALSE, echo = FALSE}
+
+networks_model_Ma_UA <- function(data, min_size) {
+    
+    data <- data[which(data$levels_N_g>min_size),] 
+    data$P_bins <- ntile(data$P_uniform_aggragation, 4)
+    data <- data %>%
+      mutate(bin1 = ifelse(P_bins==1,1,0),
+             bin2 = ifelse(P_bins==2,1,0),
+             bin3 = ifelse(P_bins==3,1,0),
+             bin4 = ifelse(P_bins==4,1,0))
+    
+
+  model_temp <- felm(formula = num_apr_12 ~ treated:bin1 + treated:bin2 + treated:bin3 + treated:bin4 + bin2 + bin3 + bin4 + female + arab + ethiopian + married + children + immigrant + slfrep_healthlimit + age + single_parent + ultraorthodox + circlespop + matriculation - 1 - treated| month_lishka_pool+levels_N_g| 0 | month_lishka_pool , data = data)
+ 
+  Joint_equality <- waldtest(model_temp, bin2 ~ bin3 ~ bin4, type = "cluster")
+  Eqauls_zero <- waldtest(model_temp, bin2 ~ bin3 ~ bin4 ~ 0, type = "cluster")
+  
+  model_row <- tidy(model_temp) %>% 
+              filter(term == "treated:bin1" | 
+                     term == "treated:bin2" | 
+                     term == "treated:bin3" |
+                     term == "treated:bin4" |
+                     term == "bin2" | 
+                     term == "bin3" | 
+                     term == "bin4") %>%
+              mutate(Cardinality = paste0("LWA - minimum ",min_size*5,"th percentile")) %>%
+              mutate(SE = std.error,
+                     N = model_temp$N,
+                     `Joint equality` = Joint_equality[4],
+                     `Eqauls zero` = Eqauls_zero[4]) %>%
+              select(term, estimate, SE, p.value, N, `Joint equality`, `Eqauls zero`)
+  assign(paste0("model_",min_size),model_row)
+}
+
+kable(networks_model_Ma_UA(data_with_treatment, 0), digits = 3)
+
+
+```
+
+
+
+## Perliminary Results - UA in $M_c$
+
+- The first estimation of the model $M_c$ is done with respect to the full control sample. 
+- To a more interpretable estimates, I standardize the treatment.
+
+```{r echo = FALSE}
+specification_network_scaled_UA  <- as.formula(num_apr_12 ~ scale(P_uniform_aggragation) + female + arab + ethiopian + married + children + immigrant + slfrep_healthlimit + age + single_parent + ultraorthodox + circlespop + matriculation | month_lishka_pool+levels_N_g| 0 | month_lishka_pool)           
+
+# runing the regression
+Network_uniform_aggregation <- felm(formula = specification_network_scaled_UA , data = data[which(data$N_g>0),])
+
+tidy(Network_uniform_aggregation) %>% 
+  filter(term == "scale(P_uniform_aggragation)") %>%
+  mutate(Model = "P Uniform Aggregation") %>%
+  mutate(SE = std.error, N = Network_uniform_aggregation$N) %>%
+  select(Model, estimate, SE, p.value, N) %>%
+  kable(digits = 3)
+```
+
+ $$\hspace{0.5cm}$$
+ 
+This result is virtually $0$ and insignificant whatsoever.
+However, since I model externalities, it seems reasonable to expect that groups with very low cardinality (particularily $N_g = 1$) are not expected to contain a sizeable effect. This is even more evident in such a crude definition of groups (locality-nationality).
+
+## Perliminary Results - UA in $M_c$
+
+I therefore estimate the same model, setting the minimal $N_g$ to growing sizes:
+
+```{r warning=FALSE, echo = FALSE}
+
+networks_basic_model_UA <- function(data, i) {
+
+  model_temp <- felm(formula = specification_network_scaled_UA , data = data[which(data$levels_N_g>i),])
+  model_row <- tidy(model_temp) %>% 
+              filter(term == "scale(P_uniform_aggragation)") %>%
+              mutate(Cardinality = paste0("UA - minimum ",i*5,"th percentile")) %>%
+              mutate(SE = std.error,
+                     N = model_temp$N,
+                     `One-Sided P` = ifelse(estimate<0, p.value/2, 0.5*(1-p.value)),
+                     `Two-Sided P` = p.value) %>%
+              select(Cardinality, estimate, SE, `One-Sided P`,`Two-Sided P`, N)
+  
+  assign(paste0("model_",i),model_row)
+  
+}
+
+UA_min_size = lapply(seq(0,12,2), networks_basic_model_UA, data = data)
+kable(bind_rows(UA_min_size), digits = 3)
+```
+ 
+## Perliminary Results - UA in $M_c$
+
+- All point estimates are negative and most of them are large, compared with ITT results.
+- Balance tests hold for this range of samples.
+- It seems that the effect may be stronger in middle-sized groups.
+
+NOTE: the treatment is rescaled in every estimation.
+
+## Perliminary Results - LUA in $M_c$
+
+The same form of estimation for the limited uniform aggregation yields:
+
+```{r warning=FALSE, echo = FALSE}
+
+specification_network_scaled_LUA  <- as.formula(num_apr_12 ~ scale(P_limited_uniform_aggregation) + female + arab + ethiopian + married + children + immigrant + slfrep_healthlimit + age + single_parent + ultraorthodox + circlespop + matriculation | month_lishka_pool+levels_N_g| 0 | month_lishka_pool)   
+
+networks_basic_model_LUA <- function(data, i) {
+
+  model_temp <- felm(formula = specification_network_scaled_LUA , data = data[which(data$levels_N_g>i),])
+  model_row <- tidy(model_temp) %>% 
+              filter(term == "scale(P_limited_uniform_aggregation)") %>%
+              mutate(Cardinality = paste0("LUA - minimum ",i*5,"th percentile")) %>%
+              mutate(SE = std.error,
+                     N = model_temp$N,
+                     `One-Sided P` = ifelse(estimate<0, p.value/2, 0.5*(1-p.value)),
+                     `Two-Sided P` = p.value) %>%
+              select(Cardinality, estimate, SE, `One-Sided P`,`Two-Sided P`, N)
+  
+  assign(paste0("model_",i),model_row)
+  
+}
+
+LUA_min_size = lapply(seq(0,12,2), networks_basic_model_LUA, data = data)
+kable(bind_rows(LUA_min_size), digits = 3)
+```
+
+## Perliminary Results - LWA in $M_c$
+
+And again for the limited weighted aggregation:
+```{r warning=FALSE, echo = FALSE}
+
+specification_network_scaled_LWA  <- as.formula(num_apr_12 ~ scale(P_limited_weighted_aggregation) + female + arab + ethiopian + married + children + immigrant + slfrep_healthlimit + age + single_parent + ultraorthodox + circlespop + matriculation | month_lishka_pool+levels_N_g| 0 | month_lishka_pool)   
+
+networks_basic_model_LWA <- function(data, i) {
+
+  model_temp <- felm(formula = specification_network_scaled_LWA , data = data[which(data$levels_N_g>i),])
+  model_row <- tidy(model_temp) %>% 
+              filter(term == "scale(P_limited_weighted_aggregation)") %>%
+              mutate(Cardinality = paste0("LWA - minimum ",i*5,"th percentile")) %>%
+              mutate(SE = std.error,
+                     N = model_temp$N,
+                     `One-Sided P` = ifelse(estimate<0, p.value/2, 0.5*(1-p.value)),
+                     `Two-Sided P` = p.value) %>%
+              select(Cardinality, estimate, SE, `One-Sided P`,`Two-Sided P`, N)
+  
+  assign(paste0("model_",i),model_row)
+  
+}
+
+LWA_min_size = lapply(seq(0,12,2), networks_basic_model_LWA, data = data)
+kable(bind_rows(LWA_min_size), digits = 3)
+```
+
+
+## Discussion and Future Plans
+
+- Heterogeneity analysis using ML.
+
+- Different definition for groups.
+
+- Reducing the size of large groups by a mapping from zipcodes to statistical areas.
+
+- $f(N_g)$ is a *variance killer*, maybe a continuous functional form will allow for better results.
+
+
+
+## Class comments
+
+1) I should investigate the way $N_g$ is generated in each employment office - how the allocation is being carried out? How assignments quotas are determeined? How it is decided which job-seeker will be in the program and which won't?
+
+2) $P$ in my definition doesn't take into account the real size of the group, and I should correct for that. An easy solution is using the locality data.
+
+3) David suggested estimating a log-log equation (or Poison what-ever) of the form:
+$$log(y) = log(p) + log(N_g) - log(TotalPopulationG)+...$$
+I am not sure if this solves the selection. It actually as defining $P' = (\frac{\sum T}{TotalPopulationG})$ 
+
+4) The IES have great data about JSKs in monthly terms. If I only expect externalities among unemployed, I may gain within group variability. Not sure. 
+
+
+
+
+
+
